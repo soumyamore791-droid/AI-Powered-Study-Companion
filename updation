@@ -1,0 +1,182 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+/**
+ * @title AI Powered Study Companion with ERC20 Reward System
+ * @dev Students can log study sessions, earn real ERC20 reward tokens, and redeem them for incentives.
+ */
+contract StudyToken is ERC20, Ownable {
+    constructor() ERC20("StudyToken", "STDY") Ownable(msg.sender) {}
+
+    function mint(address to, uint256 amount) external onlyOwner {
+        _mint(to, amount);
+    }
+
+    function burn(address from, uint256 amount) external onlyOwner {
+        _burn(from, amount);
+    }
+}
+
+/**
+ * @title AI Powered Study Companion
+ * @dev Decentralized platform for tracking study progress, issuing token rewards, and managing learning sessions.
+ */
+contract AIPoweredStudyCompanion is Ownable {
+    // Struct to store student information
+    struct Student {
+        address studentAddress;
+        string name;
+        uint256 totalStudyMinutes;
+        uint256 lastStudyTimestamp;
+        bool isRegistered;
+    }
+
+    // Struct to store study session details
+    struct StudySession {
+        uint256 sessionId;
+        address student;
+        string subject;
+        uint256 duration; // in minutes
+        uint256 timestamp;
+        bool aiAssisted;
+    }
+
+    // State variables
+    mapping(address => Student) public students;
+    mapping(uint256 => StudySession) public studySessions;
+    uint256 public sessionCounter;
+    uint256 public constant REWARD_RATE = 10; // 10 tokens per hour of study (1 token = 0.1h)
+    StudyToken public rewardToken;
+
+    // Events
+    event StudentRegistered(address indexed student, string name);
+    event StudySessionLogged(uint256 indexed sessionId, address indexed student, string subject, uint256 duration, bool aiAssisted);
+    event RewardsMinted(address indexed student, uint256 amount);
+    event TokensRedeemed(address indexed student, uint256 amount);
+
+    // Modifiers
+    modifier onlyRegistered() {
+        require(students[msg.sender].isRegistered, "Not a registered student");
+        _;
+    }
+
+    constructor(address _tokenAddress) Ownable(msg.sender) {
+        rewardToken = StudyToken(_tokenAddress);
+        sessionCounter = 0;
+    }
+
+    /**
+     * @dev Register a new student.
+     */
+    function registerStudent(string memory _name) external {
+        require(!students[msg.sender].isRegistered, "Already registered");
+        require(bytes(_name).length > 0, "Name cannot be empty");
+
+        students[msg.sender] = Student({
+            studentAddress: msg.sender,
+            name: _name,
+            totalStudyMinutes: 0,
+            lastStudyTimestamp: 0,
+            isRegistered: true
+        });
+
+        emit StudentRegistered(msg.sender, _name);
+    }
+
+    /**
+     * @dev Log a study session and mint ERC20 rewards.
+     */
+    function logStudySession(
+        string memory _subject,
+        uint256 _duration,
+        bool _aiAssisted
+    ) external onlyRegistered {
+        require(_duration >= 15, "Minimum 15 minutes required");
+        require(_duration <= 480, "Cannot exceed 8 hours");
+        require(bytes(_subject).length > 0, "Subject cannot be empty");
+
+        sessionCounter++;
+        studySessions[sessionCounter] = StudySession({
+            sessionId: sessionCounter,
+            student: msg.sender,
+            subject: _subject,
+            duration: _duration,
+            timestamp: block.timestamp,
+            aiAssisted: _aiAssisted
+        });
+
+        Student storage student = students[msg.sender];
+        student.totalStudyMinutes += _duration;
+        student.lastStudyTimestamp = block.timestamp;
+
+        // Calculate reward (proportional to minutes)
+        uint256 rewardAmount = (_duration * REWARD_RATE) / 60;
+        if (_aiAssisted) {
+            rewardAmount += (rewardAmount * 20) / 100; // +20% AI bonus
+        }
+
+        rewardToken.mint(msg.sender, rewardAmount * (10 ** rewardToken.decimals()));
+
+        emit StudySessionLogged(sessionCounter, msg.sender, _subject, _duration, _aiAssisted);
+        emit RewardsMinted(msg.sender, rewardAmount);
+    }
+
+    /**
+     * @dev Redeem (burn) reward tokens for off-chain incentives.
+     */
+    function redeemTokens(uint256 _amount) external onlyRegistered {
+        require(_amount > 0, "Amount must be greater than 0");
+        uint256 decimalsAdjusted = _amount * (10 ** rewardToken.decimals());
+        require(rewardToken.balanceOf(msg.sender) >= decimalsAdjusted, "Insufficient token balance");
+
+        rewardToken.burn(msg.sender, decimalsAdjusted);
+        emit TokensRedeemed(msg.sender, _amount);
+    }
+
+    /**
+     * @dev Reset a student's study data (admin action).
+     */
+    function resetStudentProgress(address _student) external onlyOwner {
+        require(students[_student].isRegistered, "Student not found");
+        students[_student].totalStudyMinutes = 0;
+        students[_student].lastStudyTimestamp = 0;
+    }
+
+    /**
+     * @dev Get student info.
+     */
+    function getStudentInfo(address _student) external view returns (
+        string memory name,
+        uint256 totalStudyMinutes,
+        uint256 lastStudyTimestamp,
+        uint256 tokenBalance
+    ) {
+        Student memory s = students[_student];
+        require(s.isRegistered, "Not registered");
+        return (
+            s.name,
+            s.totalStudyMinutes,
+            s.lastStudyTimestamp,
+            rewardToken.balanceOf(_student)
+        );
+    }
+
+    function getStudySession(uint256 _sessionId) external view returns (
+        address student,
+        string memory subject,
+        uint256 duration,
+        uint256 timestamp,
+        bool aiAssisted
+    ) {
+        require(_sessionId > 0 && _sessionId <= sessionCounter, "Invalid session ID");
+        StudySession memory session = studySessions[_sessionId];
+        return (session.student, session.subject, session.duration, session.timestamp, session.aiAssisted);
+    }
+
+    function getTotalSessions() external view returns (uint256) {
+        return sessionCounter;
+    }
+}
